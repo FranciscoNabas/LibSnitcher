@@ -198,7 +198,7 @@ public class PortableExecutable
         return false;
 	}
 
-	private static void SkipDosHeader(ref PeBinaryReader reader, out bool isCOFFOnly)
+	private static void SkipDosHeader(ref PeBinaryReader reader, out bool isCOFFOnly) 
 	{
 		ushort num = reader.ReadUInt16();
 		if (num != 23117)
