@@ -46,14 +46,13 @@ namespace LibSnitcher::Core
 
 		typedef struct _LS_IMAGE_BASIC_INFORMATION
 		{
-			bool IsLoaded;
 			bool IsClr;
 			DWORD ImportTableRva;
 			DWORD DelayLoadTableRva;
 			wuvector<WuString>* Dependencies;
 
 			_LS_IMAGE_BASIC_INFORMATION()
-				: IsLoaded(false), IsClr(false), ImportTableRva(0), DelayLoadTableRva(0) {
+				: IsClr(false), ImportTableRva(0), DelayLoadTableRva(0) {
 				Dependencies = new wuvector<WuString>();
 			}
 
@@ -68,7 +67,6 @@ namespace LibSnitcher::Core
 		// information is required.
 		const LSRESULT GetPeHeaders(WWuString image_path, PLS_PORTABLE_EXECUTABLE pe_headers);
 
-		
 		const LSRESULT GetImageBasicInformation(HMODULE hmodule, PLS_IMAGE_BASIC_INFORMATION image_info) noexcept;
 
 		// This function attempts to list the module names in the image's import, and delay load tables.

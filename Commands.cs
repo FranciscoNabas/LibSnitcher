@@ -9,13 +9,13 @@ namespace LibSnitcher.Commands
         [Parameter(Mandatory = true)]
         public string Path { get; set; }
 
+        [Parameter(Mandatory = true)]
+        public int ThreadCount { get; set; }
+
         protected override void ProcessRecord()
         {
-            string text = string.Empty;
-            Helpers helper = new();
-            LibraryInfo info = helper.GetLibraryInfo(Path);
-            Helpers.PrintLibraryInfo(info, ref text);
-            WriteObject(text);
+            Helper helper = new(this);
+            helper.GetDependencyChainList(Path, ThreadCount);
         }
     }
 }

@@ -18,7 +18,28 @@ using namespace System::Runtime::InteropServices;
 
 namespace LibSnitcher
 {
+	public enum class DependencySource
+	{
+		None,
+		PeTables,
+		ReferencedAssemblies
+	};
+
 	public ref class DependencyEntry
+	{
+	public:
+		property String^ Name { String^ get() { return _name; } }
+		property DependencySource Source { DependencySource get() { return _source; } }
+
+		DependencyEntry(String^ name, DependencySource source)
+			: _name(name), _source(source) { }
+
+	private:
+		String^ _name;
+		DependencySource _source;
+	};
+
+	public ref class LibInfo
 	{
 	public:
 		property String^ Name {
@@ -33,28 +54,38 @@ namespace LibSnitcher
 			Boolean get() { return _loaded; }
 			void set(Boolean value) { _loaded = value; }
 		}
+		property Exception^ LoaderError {
+			Exception^ get() { return _loader_error; }
+			void set(Exception^ value) { _loader_error = value; }
+		}
 		property Boolean IsClr {
 			Boolean get() { return _is_clr; }
 			void set(Boolean value) { _is_clr = value; }
 		}
-		property array<String^>^ Dependencies {
-			array<String^>^ get() { return _dependencies; }
-			void set(array<String^>^ value) { _dependencies = value; }
+		property array<DependencyEntry^>^ Dependencies {
+			array<DependencyEntry^>^ get() {
+				if (_dependencies != nullptr)
+					return _dependencies->ToArray();
+
+				return nullptr;
+			}
+			void set(array<DependencyEntry^>^ value) { _dependencies = gcnew List<DependencyEntry^>(value); }
 		}
 
-		DependencyEntry() { }
-		DependencyEntry(String^ name, Boolean loaded, Boolean is_clr)
-			: _name(name), _loaded(loaded), _is_clr(is_clr) { }
+		LibInfo() { }
+		LibInfo(String^ name, Boolean loaded, Boolean is_clr)
+			: _name(name), _loaded(loaded), _is_clr(is_clr), _dependencies(gcnew List<DependencyEntry^>()) { }
 
-		DependencyEntry(String^ name, String^ path, Boolean is_clr, Boolean loaded)
+		LibInfo(String^ name, String^ path, Boolean is_clr, Boolean loaded)
 			: _name(name), _path(path), _loaded(loaded), _is_clr(is_clr) { }
 
 	private:
 		String^ _name;
 		String^ _path;
 		Boolean _loaded;
+		Exception^ _loader_error;
 		Boolean _is_clr;
-		array<String^>^ _dependencies;
+		List<DependencyEntry^>^ _dependencies;
 	};
 
 	[Serializable()]
@@ -97,7 +128,8 @@ namespace LibSnitcher::Core {
 	{
 	public:
 		void TestLoadImageFile(String^ file_name);
-		DependencyEntry^ GetDependencyList(String^ file_path);
+		LibInfo^ GetDependencyList(String^ file_name, DependencySource source);
+		static LibInfo^ GetLibBasicInfo(String^ file_name, DependencySource source);
 
 	private:
 		PeHelper* pe_helper;
@@ -116,5 +148,34 @@ namespace LibSnitcher::Core {
 	static DateTime GetDateTimeFromTimeT(DWORD seconds) {
 		double sec = static_cast<double>(seconds);
 		return DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind::Utc).AddSeconds(sec);
+	}
+
+	static bool TryLoadAssembly(String^ name, String^ path, Assembly^& assembly, Exception^& loader_exception) {
+		
+		try {
+			assembly = Assembly::Load(name);
+		}
+		catch (Exception^ ex) {
+			loader_exception = ex;
+			try {
+				assembly = Assembly::LoadFrom(name);
+			}
+			catch (Exception^) {
+				if (!String::IsNullOrEmpty(path)) {
+					try {
+						assembly = Assembly::LoadFrom(path);
+					}
+					catch (Exception^) {
+						return false;
+					}
+				}
+				else {
+					return false;
+				}
+			}
+		}
+
+		loader_exception = nullptr;
+		return true;
 	}
 }

@@ -4,12 +4,20 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <AssemblyName>LibSnitcher</AssemblyName>
     <LangVersion>11</LangVersion>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="PowerShellStandard.Library" Version="5.1.0-preview-06">
       <PrivateAssets>All</PrivateAssets>
     </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="ClrCore">
+      <HintPath>ClrCore\Release\x64\ClrCore.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
 </Project>
