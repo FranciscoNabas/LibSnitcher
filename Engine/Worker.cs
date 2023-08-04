@@ -1,7 +1,7 @@
 using System;
 using System.Linq;
-using System.Text;
 using System.Threading;
+using System.Diagnostics;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Management.Automation;
@@ -11,7 +11,7 @@ using LibSnitcher.Core;
 namespace LibSnitcher
 {
     internal delegate void WriteProgress(int id, string activity, string status);
-    internal delegate void WorkComplete(List<Work> all_work);
+    internal delegate void WorkCompleted(List<Work> all_work);
 
     public class Helper
     {
@@ -42,8 +42,8 @@ namespace LibSnitcher
         public void GetDependencyChainList(string lib_name, int max_concurrent_tasks)
         {
             // Console.WriteLine("Helper.GetDependencyChainList");
-            Worker worker = new(max_concurrent_tasks, OnWorkComplete, OnWriteProgress);
-            worker.EnqueueWork(lib_name, string.Empty, 0, DependencySource.None, Guid.NewGuid(), Guid.NewGuid());
+            Worker worker = new(max_concurrent_tasks, OnWriteProgress, OnWorkComplete);
+            worker.TriggerChainListing(lib_name);
 
             //int dot_count = 1;
             int progress_time = 0;
@@ -108,181 +108,121 @@ namespace LibSnitcher
 
     internal class Worker
     {
-        private readonly List<Work> _result;
-        private readonly WorkComplete CompletedCallback;
-        private readonly WriteProgress ProgressCallback;
-        private readonly ConcurrentDictionary<string, Work> _completed_unique;
-        private readonly List<string> _active;
-        private readonly List<Work> _orphans;
+        private readonly Wrapper _unwrapper;
+        private readonly ConcurrentBag<Task> _tasks;
+        private readonly ConcurrentDictionary<string, Work> _result;
+        private readonly List<Tuple<int, Work>> _queue;
 
-        private readonly SemaphoreSlim _semaphore;
+        private readonly WriteProgress ProgressCallback;
+        private readonly WorkCompleted CompletedCallback;
 
         private int _queued_count;
         private int _completed_count;
 
-        internal Worker(int max_thread_count, WorkComplete completed_callback, WriteProgress progress_callback)
+        internal Worker(int max_concurrent_task, WriteProgress progress_callback, WorkCompleted completed_callback)
         {
+            ProgressCallback = progress_callback;
+            CompletedCallback = completed_callback;
+
             _queued_count = 0;
             _completed_count = 0;
 
+            _queue = new();
+            _tasks = new();
             _result = new();
-            _active = new();
-            _orphans = new();
-            _completed_unique = new(StringComparer.Ordinal);
+            _unwrapper = new();
 
-            _semaphore = new(max_thread_count);
-            _semaphore.Release(max_thread_count);
-
-            CompletedCallback = completed_callback;
-            ProgressCallback = progress_callback;
-
-            Task.Run(() => {
-                lock (_orphans)
-                {
-                    if (_orphans.Count > 0)
-                    {
-                        foreach (Work orphan in _orphans)
-                            if (_completed_unique.TryGetValue(orphan.Name, out Work father))
-                            {
-                                orphan.Path = father.Path;
-                                orphan.Loaded = father.Loaded;
-                                orphan.LoaderException = father.LoaderException;
-
-                                lock (_result)
-                                    _result.Add(orphan);
-
-                                _orphans.Remove(orphan);
-                            }
-                    }
-                }
-
-                Task.Delay(1000);
-            });
+            ThreadPool.SetMaxThreads(max_concurrent_task + 2, max_concurrent_task + 2);
         }
 
-        internal void EnqueueWork(string lib_name, string parent, int depth, DependencySource source, Guid id, Guid parent_id)
+        internal void TriggerChainListing(string module_name)
         {
-            Work work = new()
-            {
-                Id = id,
-                ParentId = parent_id,
-                Name = lib_name,
-                Parent = parent,
-                Depth = depth,
-                Source = source,
-                State = WorkState.Queued,
-                Dependencies = new()
-            };
+            _tasks.Add(Task.Run(() => { DoWork(new(Guid.NewGuid(), Guid.Empty, module_name, string.Empty, DependencySource.None, 0)); }));
+            Task.WhenAll(_tasks);
+        }
 
-            lock (_active)
+        private void QueueManager()
+        {
+            var queue_copy = _queue;
+            bool first = true;
+            int current_depth = 0;
+            foreach (Tuple<int, Work> position in queue_copy.OrderBy(p => p.Item1))
             {
-                if (_active.Contains(work.Name))
+                if (first)
                 {
-                    if (_completed_unique.TryGetValue(work.Name, out Work existent))
-                    {
-                        work.Path = existent.Path;
-                        work.Loaded = existent.Loaded;
-                        work.LoaderException = existent.LoaderException;
-
-                        lock (_result)
-                            _result.Add(work);
-                    }
-                    else
-                        lock (_orphans)
-                            _orphans.Add(work);
-
-                    return;
+                    current_depth = position.Item1;
                 }
-
-                _active.Add(work.Name);
             }
-
-            _queued_count++;
-            ThreadPool.QueueUserWorkItem(DoWork, work);
         }
 
-        private void DoWork(object obj)
+        private void DoWork(Work work)
         {
-            // Wait for the semaphore.
-            _semaphore.Wait();
-
-            Work work = obj as Work;
-
-            // Getting dependency information.
-            Random random = new();
-            Wrapper unwrapper = new();
-
-            LibInfo info = unwrapper.GetDependencyList(work.Name, work.Source);
-
+            _queued_count++;
+            LibInfo info = _unwrapper.GetDependencyList(work.Name, work.Source);
+            
             work.Name = info.Name;
             work.Path = info.Path;
             work.Loaded = info.Loaded;
             work.LoaderException = info.LoaderError;
 
-            _completed_unique.TryAdd(work.Name, work);
+            _result.TryAdd(work.Name, work);
 
-            // Creating an id, and task for each dependency.
-            if (info.Dependencies is not null && info.Dependencies.Length > 0)
+            if (info.Dependencies is not null)
             {
-                work.Dependencies = new(info.Dependencies);
                 foreach (DependencyEntry entry in info.Dependencies)
-                    EnqueueWork(entry.Name, work.Name, work.Depth + 1, entry.Source, Guid.NewGuid(), work.Id);
+                {
+                    if (_result.TryGetValue(entry.Name, out Work existent))
+                    {
+                        _queued_count++;
+                        existent.Recurrences.Add(new ModuleRecurrence(work.Id, work.Depth + 1));
+                        _completed_count++;
+
+                        // string dep_text = string.Concat(Enumerable.Repeat("  ", work.Depth + 1));
+                        // Console.WriteLine(string.Join("", dep_text, $"{existent.Name} (Id: {existent.Id};Loaded: {existent.Loaded}; Parent Id: {existent.ParentId};Parent: {existent.Parent}): {existent.Path}"));
+                        ProgressCallback(0, "Listing dependency chain", $"Queued: {_queued_count}. Completed: {_completed_count}.");
+                        continue;
+                    }
+
+                    DoWork(new(Guid.NewGuid(), work.Id, entry.Name, work.Name, entry.Source, work.Depth + 1));
+                    // _tasks.Add(Task.Run(() => { DoWork(new(Guid.NewGuid(), work.Id, entry.Name, work.Name, entry.Source, work.Depth + 1)); }));
+                }
             }
 
-            // Storing the result.
-            lock (_result)
-                _result.Add(work);
-
-            // Checking if there are any pending tasks.
             _completed_count++;
-            if (_completed_count == _queued_count)
-                CompletedCallback(_result);
+            
+            // string text = string.Concat(Enumerable.Repeat("  ", work.Depth));
+            // Console.WriteLine(string.Join("", text, $"{work.Name} (Id: {work.Id};Loaded: {work.Loaded}; Parent Id: {work.ParentId};Parent: {work.Parent}): {work.Path}"));
 
-            // Progress test.
-            ProgressCallback(0, "Listing dependency chain", $"Queued: {_queued_count}; Completed: {_completed_count}");
-
-            _semaphore.Release();
+            ProgressCallback(0, "Listing dependency chain", $"Queued: {_queued_count}. Completed: {_completed_count}.");
         }
     }
-
-    public class Work
+    
+    internal class Work
     {
-        public Guid Id { get; set; }
-        public Guid ParentId { get; set; }
-        public string Name { get; set; }
-        public string Path { get; set; }
-        public int Depth { get; set; }
-        public string Parent { get; set; }
-        public bool Loaded { get; set; }
-        public Exception LoaderException { get; set; }
-        public List<DependencyEntry> Dependencies { get; set; }
-        public WorkState State { get; set; }
-        public DependencySource Source { get; set; }
+        internal Guid Id { get; }
+        internal Guid ParentId { get; }
+
+        internal string Name { get; set; }
+        internal string Parent { get; }
+        internal DependencySource Source { get; }
+        internal int Depth { get; }
+
+        internal string Path { get; set; }
+        internal bool Loaded { get; set; }
+        internal Exception LoaderException { get; set; }
+
+        internal List<ModuleRecurrence> Recurrences { get; }
+
+        internal Work(Guid id, Guid parent_id, string name, string parent, DependencySource source, int depth)
+            => (Id, ParentId, Name, Parent, Source, Depth, Recurrences) = (id, parent_id, name, parent, source, depth, new());
     }
 
-    public enum WorkState
+    internal class ModuleRecurrence
     {
-        Queued,
-        Running,
-        Completed
-    }
+        internal Guid ParentId { get; }
+        internal int Depth { get; }
 
-    public class GuidComparer : IComparer<Guid>, IEqualityComparer<Guid>
-    {
-        internal static readonly GuidComparer Instance = new();
-
-        public int Compare(Guid x, Guid y)
-        {
-            if (x == y)
-                return 0;
-
-            return -1;
-        }
-
-        public bool Equals(Guid x, Guid y)
-            => x == y;
-
-        public int GetHashCode(Guid obj)
-            => obj.GetHashCode();
+        internal ModuleRecurrence(Guid parent_id, int depth)
+            => (ParentId, Depth) = (parent_id, depth);
     }
 }
