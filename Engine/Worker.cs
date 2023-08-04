@@ -17,7 +17,7 @@ namespace LibSnitcher
     {
         private readonly PSCmdlet _context;
         private readonly HashSet<Tuple<string, Guid>> _printed;
-        
+
         private List<Work> _dep_chain;
         private bool _completed;
 
@@ -42,7 +42,8 @@ namespace LibSnitcher
         public void GetDependencyChainList(string lib_name, int max_concurrent_tasks)
         {
             // Console.WriteLine("Helper.GetDependencyChainList");
-            Worker.GetWorker(max_concurrent_tasks, OnWorkComplete, OnWriteProgress).EnqueueWork(lib_name, string.Empty, 0, DependencySource.None, Guid.NewGuid(), Guid.NewGuid());
+            Worker worker = new(max_concurrent_tasks, OnWorkComplete, OnWriteProgress);
+            worker.EnqueueWork(lib_name, string.Empty, 0, DependencySource.None, Guid.NewGuid(), Guid.NewGuid());
 
             //int dot_count = 1;
             int progress_time = 0;
@@ -107,42 +108,62 @@ namespace LibSnitcher
 
     internal class Worker
     {
-        private static Worker _instance;
-
         private readonly List<Work> _result;
         private readonly WorkComplete CompletedCallback;
         private readonly WriteProgress ProgressCallback;
-        private readonly ConcurrentDictionary<Guid, Work> _completed_unique;
+        private readonly ConcurrentDictionary<string, Work> _completed_unique;
+        private readonly List<string> _active;
+        private readonly List<Work> _orphans;
 
         private readonly SemaphoreSlim _semaphore;
 
         private int _queued_count;
         private int _completed_count;
 
-        private Worker(int max_thread_count, WorkComplete completed_callback, WriteProgress progress_callback)
+        internal Worker(int max_thread_count, WorkComplete completed_callback, WriteProgress progress_callback)
         {
             _queued_count = 0;
             _completed_count = 0;
 
             _result = new();
-            _completed_unique = new();
+            _active = new();
+            _orphans = new();
+            _completed_unique = new(StringComparer.Ordinal);
 
             _semaphore = new(max_thread_count);
             _semaphore.Release(max_thread_count);
 
             CompletedCallback = completed_callback;
             ProgressCallback = progress_callback;
-        }
 
-        internal static Worker GetWorker(int max_thread_count, WorkComplete complete_callback, WriteProgress progress_callback)
-        {
-            _instance ??= new(max_thread_count, complete_callback, progress_callback);
-            return _instance;
+            Task.Run(() => {
+                lock (_orphans)
+                {
+                    if (_orphans.Count > 0)
+                    {
+                        foreach (Work orphan in _orphans)
+                            if (_completed_unique.TryGetValue(orphan.Name, out Work father))
+                            {
+                                orphan.Path = father.Path;
+                                orphan.Loaded = father.Loaded;
+                                orphan.LoaderException = father.LoaderException;
+
+                                lock (_result)
+                                    _result.Add(orphan);
+
+                                _orphans.Remove(orphan);
+                            }
+                    }
+                }
+
+                Task.Delay(1000);
+            });
         }
 
         internal void EnqueueWork(string lib_name, string parent, int depth, DependencySource source, Guid id, Guid parent_id)
         {
-            Work work = new() {
+            Work work = new()
+            {
                 Id = id,
                 ParentId = parent_id,
                 Name = lib_name,
@@ -153,31 +174,39 @@ namespace LibSnitcher
                 Dependencies = new()
             };
 
-            Task task = DoWork(work);
-            task.Wait();
+            lock (_active)
+            {
+                if (_active.Contains(work.Name))
+                {
+                    if (_completed_unique.TryGetValue(work.Name, out Work existent))
+                    {
+                        work.Path = existent.Path;
+                        work.Loaded = existent.Loaded;
+                        work.LoaderException = existent.LoaderException;
+
+                        lock (_result)
+                            _result.Add(work);
+                    }
+                    else
+                        lock (_orphans)
+                            _orphans.Add(work);
+
+                    return;
+                }
+
+                _active.Add(work.Name);
+            }
+
+            _queued_count++;
+            ThreadPool.QueueUserWorkItem(DoWork, work);
         }
 
-        private async Task DoWork(object obj)
+        private void DoWork(object obj)
         {
-            _instance._queued_count++;
-
             // Wait for the semaphore.
-            _instance._semaphore.Wait();
+            _semaphore.Wait();
 
             Work work = obj as Work;
-            if (TryReadFromCompleted(work, out Work existent))
-            {
-                work.Path = existent.Path;
-                work.Loaded = existent.Loaded;
-                work.LoaderException = existent.LoaderException;
-            
-                lock (_instance._result)
-                    _instance._result.Add(work);
-            
-                return;
-            }
-            
-            TryAddToCompleted(work);
 
             // Getting dependency information.
             Random random = new();
@@ -190,52 +219,29 @@ namespace LibSnitcher
             work.Loaded = info.Loaded;
             work.LoaderException = info.LoaderError;
 
+            _completed_unique.TryAdd(work.Name, work);
+
             // Creating an id, and task for each dependency.
             if (info.Dependencies is not null && info.Dependencies.Length > 0)
             {
                 work.Dependencies = new(info.Dependencies);
                 foreach (DependencyEntry entry in info.Dependencies)
-                {
-                    Work dep_work = new() {
-                        Id = Guid.NewGuid(),
-                        ParentId = work.Id,
-                        Name = entry.Name,
-                        Depth = work.Depth + 1,
-                        Dependencies = new(),
-                        Source = entry.Source
-                    };
-
-                    await DoWork(dep_work);
-                }
+                    EnqueueWork(entry.Name, work.Name, work.Depth + 1, entry.Source, Guid.NewGuid(), work.Id);
             }
 
             // Storing the result.
-            lock (_instance._result)
-                _instance._result.Add(work);
+            lock (_result)
+                _result.Add(work);
 
             // Checking if there are any pending tasks.
-            _instance._completed_count++;
-            if (_instance._completed_count == _instance._queued_count)
-                _instance.CompletedCallback(_instance._result);
+            _completed_count++;
+            if (_completed_count == _queued_count)
+                CompletedCallback(_result);
 
             // Progress test.
-            ProgressCallback(0, "Listing dependency chain", $"Queued: {_instance._queued_count}; Completed: {_instance._completed_count}");
+            ProgressCallback(0, "Listing dependency chain", $"Queued: {_queued_count}; Completed: {_completed_count}");
 
             _semaphore.Release();
-        }
-
-        private bool TryAddToCompleted(Work work)
-        {
-            Console.ForegroundColor = ConsoleColor.DarkYellow;
-            Console.WriteLine($"Storing work. Lib: {work.Name}.");
-            return _completed_unique.TryAdd(work.Id, work);
-        }
-
-        private bool TryReadFromCompleted(Work work, out Work output)
-        {
-            Console.ForegroundColor = ConsoleColor.DarkGreen;
-            Console.WriteLine($"Reading work. Lib: {work.Name}.");
-            return _completed_unique.TryGetValue(work.Id, out output);
         }
     }
 
@@ -259,5 +265,24 @@ namespace LibSnitcher
         Queued,
         Running,
         Completed
+    }
+
+    public class GuidComparer : IComparer<Guid>, IEqualityComparer<Guid>
+    {
+        internal static readonly GuidComparer Instance = new();
+
+        public int Compare(Guid x, Guid y)
+        {
+            if (x == y)
+                return 0;
+
+            return -1;
+        }
+
+        public bool Equals(Guid x, Guid y)
+            => x == y;
+
+        public int GetHashCode(Guid obj)
+            => obj.GetHashCode();
     }
 }
