@@ -1,228 +1,198 @@
 using System;
 using System.Linq;
-using System.Threading;
-using System.Diagnostics;
-using System.Threading.Tasks;
+using System.Text;
 using System.Collections.Generic;
 using System.Management.Automation;
-using System.Collections.Concurrent;
 using LibSnitcher.Core;
 
 namespace LibSnitcher
 {
-    internal delegate void WriteProgress(int id, string activity, string status);
-    internal delegate void WorkCompleted(List<Work> all_work);
-
     public class Helper
     {
         private readonly PSCmdlet _context;
-        private readonly HashSet<Tuple<string, Guid>> _printed;
-
-        private List<Work> _dep_chain;
-        private bool _completed;
-
-        private int _id;
-        private string _activity;
-        private string _status;
+        private readonly HashSet<Guid> _printed;
 
         public Helper(PSCmdlet context)
         {
             _context = context;
-            _dep_chain = new();
             _printed = new();
-            _completed = false;
-
-            _id = 0;
-            _activity = "Listing dependency chain";
-            _status = "Initializing...";
-
-            // Console.WriteLine("Helper constructor");
         }
 
-        public void GetDependencyChainList(string lib_name, int max_concurrent_tasks)
+        public void GetDependencyChainList(string lib_name, bool unique)
         {
-            // Console.WriteLine("Helper.GetDependencyChainList");
-            Worker worker = new(max_concurrent_tasks, OnWriteProgress, OnWorkComplete);
-            worker.TriggerChainListing(lib_name);
+            DependencyChain factory = DependencyChain.GetChain(unique);
+            List<Module> chain = factory.ResolveDependencyChain(lib_name);
+            GetTextListFromModuleList(chain.First(m => m.Depth == 0));
 
-            //int dot_count = 1;
-            int progress_time = 0;
-            do
-            {
-                // if (progress_time >= 750)
-                // {
-                //     if (dot_count >= 3)
-                //         dot_count = 1;
-                //     else
-                //         dot_count++;
-
-                //     progress_time = 0;
-                // }
-
-                // StringBuilder buffer = new();
-                // buffer.Append($"Listing dependency chain");
-                // buffer.Append('.', dot_count);
-                _context.WriteProgress(new(_id, _activity, _status));
-
-                Thread.Sleep(10);
-                progress_time += 10;
-
-            } while (!_completed);
-
-            GetTextListFromWorkList(_dep_chain);
+            factory.Dispose();
         }
 
-        private void GetTextListFromWorkList(List<Work> work_list)
+        private void GetTextListFromModuleList(Module root)
         {
-            foreach (Work work in from w in work_list orderby w.Depth select w)
-            {
-                Tuple<string, Guid> current = new(work.Name, work.Id);
-                if (_printed.Contains(current))
-                    continue;
+            if (_printed.Contains(root.Id))
+                return;
 
-                // Printing the parent.
-                PrintWork(work);
-                _printed.Add(current);
+            PrintWork(root);
+            _printed.Add(root.Id);
 
-                // Printing the children.
-                List<Work> children = work_list.Where(w => w.ParentId == work.Id).ToList();
-                GetTextListFromWorkList(children);
-            }
+            foreach (Module dependency in root.Dependencies)
+                GetTextListFromModuleList(dependency);
         }
 
-        private void PrintWork(Work work)
+        private void PrintWork(Module module)
         {
-            string text = string.Concat(Enumerable.Repeat("  ", work.Depth));
-            text = string.Join("", text, $"{work.Name} (Id: {work.Id};Loaded: {work.Loaded}; Parent Id: {work.ParentId};Parent: {work.Parent}): {work.Path}");
-            // text = string.Join("", text, $"{work.Name} (Loaded: {work.Loaded}; Parent: {work.Parent}): {work.Path}");
+            StringBuilder buffer = new();
+            buffer.Append(' ', module.Depth * 2);
+            buffer.Append($"{module.Name} (Loaded: {module.Loaded}): {module.PostfixText}");
 
-            _context.WriteObject(text);
+            // buffer.Append($"{module.Name} <{module.Depth}> (Loaded: {module.Loaded}; Parent: {module.Parent}): {module.Path}");
+            // buffer.Append($"{module.Name} (Id: {module.Id};Loaded: {module.Loaded}; Parent Id: {module.ParentId};Parent: {module.Parent}): {module.Path}");
+
+            _context.WriteObject(buffer.ToString());
         }
-
-        private void OnWorkComplete(List<Work> dep_chain)
-            => (_completed, _dep_chain) = (true, dep_chain);
-
-        private void OnWriteProgress(int id, string activity, string status)
-            => (_id, _activity, _status) = (id, activity, status);
     }
 
-    internal class Worker
+    internal class DependencyChain : IDisposable
     {
+        private bool _unique;
         private readonly Wrapper _unwrapper;
-        private readonly ConcurrentBag<Task> _tasks;
-        private readonly ConcurrentDictionary<string, Work> _result;
-        private readonly List<Tuple<int, Work>> _queue;
+        private static DependencyChain _instance;
+        private readonly Dictionary<string, Module> _result;
 
-        private readonly WriteProgress ProgressCallback;
-        private readonly WorkCompleted CompletedCallback;
+        internal bool Unique { get { return _instance._unique; } }
 
-        private int _queued_count;
-        private int _completed_count;
-
-        internal Worker(int max_concurrent_task, WriteProgress progress_callback, WorkCompleted completed_callback)
+        private DependencyChain()
         {
-            ProgressCallback = progress_callback;
-            CompletedCallback = completed_callback;
-
-            _queued_count = 0;
-            _completed_count = 0;
-
-            _queue = new();
-            _tasks = new();
             _result = new();
             _unwrapper = new();
-
-            ThreadPool.SetMaxThreads(max_concurrent_task + 2, max_concurrent_task + 2);
         }
 
-        internal void TriggerChainListing(string module_name)
+        public void Dispose()
         {
-            _tasks.Add(Task.Run(() => { DoWork(new(Guid.NewGuid(), Guid.Empty, module_name, string.Empty, DependencySource.None, 0)); }));
-            Task.WhenAll(_tasks);
+            // Being static, the instance only gets collected when its app domain dies.
+            // If we call the Cmdlet again with different parameters, we will be using the
+            // previous instance. Setting it to null makes it available to the GC.
+            _instance = null;
+            GC.Collect();
         }
 
-        private void QueueManager()
+        internal static DependencyChain GetChain(bool unique)
         {
-            var queue_copy = _queue;
-            bool first = true;
-            int current_depth = 0;
-            foreach (Tuple<int, Work> position in queue_copy.OrderBy(p => p.Item1))
+            _instance ??= new();
+            _instance._unique = unique;
+            return _instance;
+        }
+
+        internal List<Module> ResolveDependencyChain(string module_name)
+        {
+            Module root = GetModule(Guid.Empty, module_name, string.Empty, DependencySource.None, 0, out _);
+            root.ResolveDependencies();
+            return _instance._result.Values.ToList();
+        }
+
+        internal Module GetModule(Guid parent_id, string name, string parent, DependencySource source, int depth, out bool is_trivial)
+        {
+            if (_instance._result.TryGetValue(name, out Module module))
             {
-                if (first)
-                {
-                    current_depth = position.Item1;
-                }
+                is_trivial = true;
+                return module.TrivialCopy(depth, parent, parent_id);
             }
-        }
+            is_trivial = false;
 
-        private void DoWork(Work work)
-        {
-            _queued_count++;
-            LibInfo info = _unwrapper.GetDependencyList(work.Name, work.Source);
-            
-            work.Name = info.Name;
-            work.Path = info.Path;
-            work.Loaded = info.Loaded;
-            work.LoaderException = info.LoaderError;
+            LibInfo info = _unwrapper.GetDependencyList(name, source);
+            Module new_module = new(Guid.NewGuid(), parent_id, info.Name, parent, source, depth, info.Path, info.Loaded, info.LoaderError, info.Dependencies, ref _instance);
+            _result.Add(name, new_module);
 
-            _result.TryAdd(work.Name, work);
-
-            if (info.Dependencies is not null)
-            {
-                foreach (DependencyEntry entry in info.Dependencies)
-                {
-                    if (_result.TryGetValue(entry.Name, out Work existent))
-                    {
-                        _queued_count++;
-                        existent.Recurrences.Add(new ModuleRecurrence(work.Id, work.Depth + 1));
-                        _completed_count++;
-
-                        // string dep_text = string.Concat(Enumerable.Repeat("  ", work.Depth + 1));
-                        // Console.WriteLine(string.Join("", dep_text, $"{existent.Name} (Id: {existent.Id};Loaded: {existent.Loaded}; Parent Id: {existent.ParentId};Parent: {existent.Parent}): {existent.Path}"));
-                        ProgressCallback(0, "Listing dependency chain", $"Queued: {_queued_count}. Completed: {_completed_count}.");
-                        continue;
-                    }
-
-                    DoWork(new(Guid.NewGuid(), work.Id, entry.Name, work.Name, entry.Source, work.Depth + 1));
-                    // _tasks.Add(Task.Run(() => { DoWork(new(Guid.NewGuid(), work.Id, entry.Name, work.Name, entry.Source, work.Depth + 1)); }));
-                }
-            }
-
-            _completed_count++;
-            
-            // string text = string.Concat(Enumerable.Repeat("  ", work.Depth));
-            // Console.WriteLine(string.Join("", text, $"{work.Name} (Id: {work.Id};Loaded: {work.Loaded}; Parent Id: {work.ParentId};Parent: {work.Parent}): {work.Path}"));
-
-            ProgressCallback(0, "Listing dependency chain", $"Queued: {_queued_count}. Completed: {_completed_count}.");
+            return new_module;
         }
     }
-    
-    internal class Work
+
+    internal class Module
     {
-        internal Guid Id { get; }
-        internal Guid ParentId { get; }
+        private readonly DependencyChain _chain;
+        private readonly DependencyEntry[] _native_dependencies;
 
-        internal string Name { get; set; }
-        internal string Parent { get; }
+        internal Guid Id { get; private set; }
+        internal Guid ParentId { get; private set; }
+
+        internal string Name { get; private set; }
+        internal string Parent { get; private set; }
         internal DependencySource Source { get; }
-        internal int Depth { get; }
-
+        internal int Depth { get; private set; }
         internal string Path { get; set; }
         internal bool Loaded { get; set; }
         internal Exception LoaderException { get; set; }
 
-        internal List<ModuleRecurrence> Recurrences { get; }
+        internal List<Module> Dependencies { get; private set; }
 
-        internal Work(Guid id, Guid parent_id, string name, string parent, DependencySource source, int depth)
-            => (Id, ParentId, Name, Parent, Source, Depth, Recurrences) = (id, parent_id, name, parent, source, depth, new());
-    }
+        internal string PostfixText
+        {
+            get
+            {
+                if (Loaded)
+                    return Path;
+                else
+                    if (LoaderException is not null)
+                    return LoaderException.Message;
 
-    internal class ModuleRecurrence
-    {
-        internal Guid ParentId { get; }
-        internal int Depth { get; }
+                return string.Empty;
+            }
+        }
 
-        internal ModuleRecurrence(Guid parent_id, int depth)
-            => (ParentId, Depth) = (parent_id, depth);
+        internal Module(Guid id, Guid parent_id, string name, string parent, DependencySource source, 
+            int depth, string path, bool loaded, Exception loader_exception, DependencyEntry[] native_dependencies, ref DependencyChain chain)
+        {
+            _chain = chain;
+            if (native_dependencies is not null)
+                _native_dependencies = native_dependencies;
+            else
+                _native_dependencies = new DependencyEntry[0];
+
+            Id = id;
+            ParentId = parent_id;
+            Name = name;
+            Parent = parent;
+            Source = source;
+            Depth = depth;
+            Path = path;
+            Loaded = loaded;
+            LoaderException = loader_exception;
+            Dependencies = new();
+        }
+
+        internal Module TrivialCopy(int depth, string parent, Guid parent_id)
+        {
+            Module new_module = (Module)this.MemberwiseClone();
+
+            new_module.Depth = depth;
+            new_module.Parent = parent;
+            new_module.ParentId = parent_id;
+            new_module.Dependencies = new();
+
+            if (!_chain.Unique)
+                new_module.Id = Guid.NewGuid();
+
+            return new_module;
+        }
+
+        internal void ResolveDependencies()
+        {
+            List<Module> new_dependencies = new();
+            foreach (DependencyEntry entry in _native_dependencies)
+            {
+                Module dependency = _chain.GetModule(Id, entry.Name, Name, entry.Source, Depth + 1, out bool is_trivial);
+                if (is_trivial)
+                {
+                    Dependencies.Add(dependency);
+                    continue;
+                }
+
+                Dependencies.Add(dependency);
+                new_dependencies.Add(dependency);
+            }
+
+            foreach (Module dependency in new_dependencies)
+                dependency.ResolveDependencies();
+        }
     }
 }

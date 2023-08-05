@@ -96,7 +96,7 @@ namespace LibSnitcher
 		property String^ CompactTrace { String^ get() { return _compact_trace; } }
 
 		NativeException(Int32 error_code)
-			: Exception(gcnew String(Core::LSRESULT::GetErrorMessage(error_code).GetBuffer())),
+			: Exception((gcnew String(Core::LSRESULT::GetErrorMessage(error_code).GetBuffer()))->Trim()),
 			  _error_code(error_code) { }
 
 		NativeException(Int32 error_code, String^ message)
@@ -127,7 +127,6 @@ namespace LibSnitcher::Core {
 	public ref class Wrapper
 	{
 	public:
-		void TestLoadImageFile(String^ file_name);
 		LibInfo^ GetDependencyList(String^ file_name, DependencySource source);
 		static LibInfo^ GetLibBasicInfo(String^ file_name, DependencySource source);
 

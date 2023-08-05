@@ -4,11 +4,6 @@
 
 namespace LibSnitcher::Core
 {
-	void Wrapper::TestLoadImageFile(String^ file_path)
-	{
-		
-	}
-
 	LibInfo^ Wrapper::GetLibBasicInfo(String^ file_name, DependencySource source)
 	{
 		LibInfo^ output;
@@ -58,7 +53,6 @@ namespace LibSnitcher::Core
 				if (buffer != NULL)
 					path = gcnew String(buffer);
 
-				name = Path::GetFileName(path);
 				output = gcnew LibInfo(name, path, false, true);
 			}
 		}
@@ -78,8 +72,6 @@ namespace LibSnitcher::Core
 					GetModuleFileName(hmodule, buffer, MAX_PATH);
 					if (buffer != NULL)
 						output->Path = gcnew String(buffer);
-
-					name = Path::GetFileName(path);
 
 					output->Loaded = true;
 				}
@@ -121,10 +113,14 @@ namespace LibSnitcher::Core
 		if (source == DependencySource::None || source == DependencySource::PeTables)
 		{
 			// Attempting to get a module handle.
+			DWORD last_error;
 			bool fallback = false;
 			hmodule = LoadLibrary(wrapped_path.GetBuffer());
 			if (hmodule == NULL)
+			{
+				last_error = GetLastError();
 				fallback = true;
+			}
 
 			// Trying to fallback to reflection.
 			if (fallback)
@@ -134,7 +130,7 @@ namespace LibSnitcher::Core
 				if (!TryLoadAssembly(name, path, assembly, loader_exception))
 				{
 					output = gcnew LibInfo(name, path, false, false);
-					output->LoaderError = loader_exception;
+					output->LoaderError = gcnew NativeException(last_error);
 					return output;
 				}
 
@@ -181,8 +177,6 @@ namespace LibSnitcher::Core
 				GetModuleFileName(hmodule, buffer, MAX_PATH);
 				if (buffer != NULL)
 					path = gcnew String(buffer);
-
-				name = Path::GetFileName(path);
 
 				// Attempting to get basic PE information.
 				auto basic_info = make_wuunique<PeHelper::LS_IMAGE_BASIC_INFORMATION>();
@@ -261,7 +255,7 @@ namespace LibSnitcher::Core
 				if (hmodule == NULL)
 				{
 					output = gcnew LibInfo(name, path, false, false);
-					output->LoaderError = gcnew NativeException(GetLastError());
+					output->LoaderError = loader_exception;
 					return output;
 				}
 
