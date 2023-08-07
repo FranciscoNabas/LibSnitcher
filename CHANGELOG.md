@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.2] - 07/08/2023
+
+Including VC++ redistributables.
+
 ## [1.0.1] - 07/08/2023
 
 Empty dependency list bug.

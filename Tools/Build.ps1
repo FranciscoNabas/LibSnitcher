@@ -7,6 +7,7 @@ $copy_path = @(
     '.\LICENSE'
     '.\Metadata\LibSnitcher.psd1'
     '.\Metadata\LibSnitcher.Types.ps1xml'
+    '.\Redist\*'
 )
 
 Write-Host 'Building...' -ForegroundColor DarkGreen
