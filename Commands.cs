@@ -45,10 +45,18 @@ namespace LibSnitcher.Commands
         [Parameter()]
         public SwitchParameter Unique { get; set; }
 
+        /// <summary>
+        /// <para type="description">The maximum recursion depth.</para>
+        /// <para type="description">Depth 1 returns only the dependencies for the main module.</para>
+        /// </summary>
+        [Parameter()]
+        [ValidateRange(0, int.MaxValue)]
+        public int Depth { get; set; } = 0;
+
         protected override void ProcessRecord()
         {
             Helper helper = new(this);
-            helper.PrintModuleDependencyChain(Path, Unique);
+            helper.PrintModuleDependencyChain(Path, Unique, Depth);
         }
     }
 
@@ -93,7 +101,7 @@ namespace LibSnitcher.Commands
         protected override void ProcessRecord()
         {
             Helper helper = new(this);
-            List<Module> dep_chain = helper.GetDependencyChainList(Path, true);
+            List<Module> dep_chain = helper.GetDependencyChainList(Path, true, 0);
             if (dep_chain is not null)
                 if (ClrOnly)
                     WriteObject(dep_chain.Where(m => !m.Loaded && m.IsClr), true);

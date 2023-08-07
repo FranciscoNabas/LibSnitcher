@@ -18,19 +18,19 @@ namespace LibSnitcher
             _printed = new();
         }
 
-        public List<Module> GetDependencyChainList(string lib_name, bool unique)
+        public List<Module> GetDependencyChainList(string lib_name, bool unique, int max_depth)
         {
-            DependencyChain factory = DependencyChain.GetChain(unique);
+            DependencyChain factory = DependencyChain.GetChain(unique, max_depth);
             List<Module> chain = factory.ResolveDependencyChain(lib_name);
-            
+
             factory.Dispose();
 
             return chain;
         }
 
-        public void PrintModuleDependencyChain(string lib_name, bool unique)
+        public void PrintModuleDependencyChain(string lib_name, bool unique, int max_depth)
         {
-            DependencyChain factory = DependencyChain.GetChain(unique);
+            DependencyChain factory = DependencyChain.GetChain(unique, max_depth);
             List<Module> chain = factory.ResolveDependencyChain(lib_name);
             GetTextListFromModuleList(chain.First(m => m.Depth == 0));
 
@@ -65,16 +65,18 @@ namespace LibSnitcher
     internal class DependencyChain : IDisposable
     {
         private bool _unique;
+        private int _max_depth;
         private readonly Wrapper _unwrapper;
         private static DependencyChain _instance;
         private readonly Dictionary<string, Module> _result;
 
         internal bool Unique { get { return _instance._unique; } }
 
-        private DependencyChain()
+        private DependencyChain(int max_depth)
         {
             _result = new();
             _unwrapper = new();
+            _max_depth = max_depth;
         }
 
         public void Dispose()
@@ -86,9 +88,9 @@ namespace LibSnitcher
             GC.Collect();
         }
 
-        internal static DependencyChain GetChain(bool unique)
+        internal static DependencyChain GetChain(bool unique, int max_depth)
         {
-            _instance ??= new();
+            _instance ??= new(max_depth);
             _instance._unique = unique;
             return _instance;
         }
@@ -102,16 +104,28 @@ namespace LibSnitcher
 
         internal Module GetModule(Guid parent_id, string name, string parent, DependencySource source, int new_depth, out bool is_trivial)
         {
+            Module new_module;
+            ModuleBase base_module;
+
             if (_instance._result.TryGetValue(name, out Module module))
             {
                 is_trivial = true;
                 return module.TrivialCopy(new_depth, parent, parent_id);
             }
-            is_trivial = false;
 
-            ModuleBase base_module = _unwrapper.GetDependencyList(name, source);
-            Module new_module = new(parent_id, parent, source, new_depth, base_module, ref _instance);
+            base_module = _unwrapper.GetDependencyList(name, source);
+            new_module = new(parent_id, parent, source, new_depth, base_module, ref _instance);
             _result.Add(name, new_module);
+
+            if (_max_depth > 0)
+            {
+                if (new_depth < _max_depth)
+                    is_trivial = false;
+                else
+                    is_trivial = true;
+            }
+            else
+                is_trivial = false;
 
             return new_module;
         }

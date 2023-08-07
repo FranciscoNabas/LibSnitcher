@@ -38,11 +38,14 @@ the first occurrence of a module.
 Attention! Using the `-Unique` parameter might not return all dependencies for a given module.  
   
 The `-Path` parameter accepts a file path, module name, or .NET fully qualified assembly name.
+The `-Depth` parameter allows to set the maximum recursion depth. I.E.: depth = 1 will only
+return the dependencies for the main module.
 
 ```powershell
 Get-PeDependencyChain -Path 'C:\Windows\System32\kernel32.dll'
 Get-PeDependencyChain -Path 'System.Private.CoreLib, Version=8.0.0.0, Culture=neutral'
 Get-PeDependencyChain -Name 'explorer.exe' -Unique
+Get-PeDependencyChain -Name 'ntdll.dll' -Depth 1
 ```
 
 ### Get-PeFailedDependency
