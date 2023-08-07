@@ -65,27 +65,26 @@ namespace LibSnitcher::Core
 			pe_headers->CoffHeaderOffset = 0;
 			
 			// Copying the COFF header;
-			pe_headers->CoffHeader = new IMAGE_FILE_HEADER();
-			RtlCopyMemory(pe_headers->CoffHeader, map_view, sizeof(IMAGE_FILE_HEADER));
+			RtlCopyMemory(&pe_headers->CoffHeader, map_view, sizeof(IMAGE_FILE_HEADER));
 
-			if (file_size.QuadPart < (__int64)((pe_headers->CoffHeader->NumberOfSections * sizeof(IMAGE_SECTION_HEADER)) + 20))
+			if (file_size.QuadPart < (__int64)((pe_headers->CoffHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER)) + 20))
 				return LSRESULT(ERROR_BAD_FORMAT, __FILEW__, __LINE__);
 
 			// Copying the section headers.
 			LPVOID section_offset = (LPVOID)((char*)map_view + __LINE__);
-			for (size_t i = 0; i < pe_headers->CoffHeader->NumberOfSections; i++)
+			for (size_t i = 0; i < pe_headers->CoffHeader.NumberOfSections; i++)
 			{
 				IMAGE_SECTION_HEADER sec_header = { 0 };
 				memcpy(&sec_header, section_offset, sizeof(IMAGE_SECTION_HEADER));
 
-				pe_headers->SectionHeaders->push_back(sec_header);
+				pe_headers->SectionHeaders.push_back(sec_header);
 
 				section_offset = (LPVOID)((char*)section_offset + sizeof(IMAGE_SECTION_HEADER));
 			}
 
 			// Calculating metadata location (if any).
 			bool cor_found = false;
-			for (IMAGE_SECTION_HEADER& header : *pe_headers->SectionHeaders)
+			for (IMAGE_SECTION_HEADER& header : pe_headers->SectionHeaders)
 			{
 				LPSTR section_name = reinterpret_cast<char*>(header.Name);
 				if (strcmp(section_name, ".cormeta") == 0)
@@ -97,6 +96,7 @@ namespace LibSnitcher::Core
 			}
 			if (!cor_found)
 			{
+				pe_headers->CorHeaderOffset = -1;
 				pe_headers->MetadataSize = 0;
 				pe_headers->MetadataStartOffset = 0;
 			}
@@ -124,7 +124,7 @@ namespace LibSnitcher::Core
 			// Calculating COFF header offset.
 			pe_headers->CoffHeaderOffset = pe_sig_ra + 4;
 
-			pe_headers->OptionalHeadersOffset = pe_headers->CoffHeaderOffset + 20;
+			pe_headers->OptionalHeaderOffset = pe_headers->CoffHeaderOffset + 20;
 			pe_headers->IsDll = (loaded_image->FileHeader->FileHeader.Characteristics & IMAGE_FILE_DLL) != 0;
 			pe_headers->IsExe = (loaded_image->FileHeader->FileHeader.Characteristics & IMAGE_FILE_DLL) == 0;
 			pe_headers->IsConsoleApplication = loaded_image->FileHeader->OptionalHeader.Subsystem == IMAGE_SUBSYSTEM_WINDOWS_CUI;
@@ -132,15 +132,9 @@ namespace LibSnitcher::Core
 			// Copying NT headers.
 			pe_headers->Magic = loaded_image->FileHeader->OptionalHeader.Magic;
 			if (pe_headers->Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
-			{
-				pe_headers->NtHeaders32 = new IMAGE_NT_HEADERS32();
-				RtlCopyMemory(pe_headers->NtHeaders32, loaded_image->FileHeader, sizeof(IMAGE_NT_HEADERS32));
-			}
+				RtlCopyMemory(&pe_headers->NtHeaders32, loaded_image->FileHeader, sizeof(IMAGE_NT_HEADERS32));
 			else
-			{
-				pe_headers->NtHeaders64 = new IMAGE_NT_HEADERS64();
-				RtlCopyMemory(pe_headers->NtHeaders64, loaded_image->FileHeader, sizeof(IMAGE_NT_HEADERS64));
-			}
+				RtlCopyMemory(&pe_headers->NtHeaders64, loaded_image->FileHeader, sizeof(IMAGE_NT_HEADERS64));
 			
 			// Copying section headers.
 			PIMAGE_SECTION_HEADER section_offset = loaded_image->Sections;
@@ -148,7 +142,7 @@ namespace LibSnitcher::Core
 			{
 				IMAGE_SECTION_HEADER sec_header = { 0 };
 				RtlCopyMemory(&sec_header, section_offset, sizeof(IMAGE_SECTION_HEADER));
-				pe_headers->SectionHeaders->push_back(sec_header);
+				pe_headers->SectionHeaders.push_back(sec_header);
 
 				section_offset = (PIMAGE_SECTION_HEADER)((char*)section_offset + sizeof(IMAGE_SECTION_HEADER));
 			}
@@ -169,25 +163,24 @@ namespace LibSnitcher::Core
 				pe_headers->CorHeaderOffset = cor_rel_offset;
 
 				LPVOID cor_offset = (LPVOID)((char*)loaded_image->MappedAddress + cor_rel_offset);
-				pe_headers->CorHeader = new IMAGE_COR20_HEADER();
-				RtlCopyMemory(pe_headers->CorHeader, cor_offset, sizeof(IMAGE_COR20_HEADER));
+				RtlCopyMemory(&pe_headers->CorHeader, cor_offset, sizeof(IMAGE_COR20_HEADER));
 
 				DWORD meta_rel_offset = 0;
 				result = GetDirectoryOffset(
-					pe_headers->CorHeader->MetaData,
+					pe_headers->CorHeader.MetaData,
 					loaded_image->Sections,
 					(DWORD)loaded_image->NumberOfSections,
 					meta_rel_offset,
 					false
 				);
-				
+
 				if (meta_rel_offset == 0)
 				{
 					ImageUnload(loaded_image);
 					return LSRESULT(ERROR_BAD_FORMAT, L"COR header missing data directory.", __FILEW__, __LINE__);
 				}
 
-				DWORD meta_size = pe_headers->CorHeader->MetaData.Size;
+				DWORD meta_size = pe_headers->CorHeader.MetaData.Size;
 				if (meta_rel_offset < 0 ||
 					meta_rel_offset >= loaded_image->SizeOfImage ||
 					meta_size <= 0 ||
@@ -200,6 +193,8 @@ namespace LibSnitcher::Core
 				pe_headers->MetadataSize = meta_size;
 				pe_headers->MetadataStartOffset = meta_rel_offset;
 			}
+			else
+				pe_headers->CorHeaderOffset = -1;
 
 			ImageUnload(loaded_image);
 		}
@@ -238,7 +233,6 @@ namespace LibSnitcher::Core
 			if (opt_header_size < (sizeof(IMAGE_DATA_DIRECTORY) * 15) + fixed_opt_header_size)
 				return LSRESULT(ERROR_BAD_FORMAT, L"Optional header size inconsistent with number of data directories.", __FILEW__, __LINE__);
 
-			PIMAGE_DATA_DIRECTORY data_dir = static_cast<PIMAGE_DATA_DIRECTORY>((LPVOID)((char*)opt_header_offset + fixed_opt_header_size));
 			if (data_dir[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR].Size != 0 &&
 				data_dir[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR].VirtualAddress != 0
 				)
@@ -266,7 +260,7 @@ namespace LibSnitcher::Core
 			{
 				LPSTR lib_name = (LPSTR)((char*)hmodule + imptab_opffset->Name);
 				if (lib_name != NULL)
-					img_info->Dependencies->push_back(WuString(lib_name));
+					img_info->Dependencies.push_back(lib_name);
 
 				imptab_opffset++;
 			}
@@ -279,7 +273,7 @@ namespace LibSnitcher::Core
 			{
 				LPSTR lib_name = (LPSTR)((char*)hmodule + delload_opffset->DllNameRVA);
 				if (lib_name != NULL)
-					img_info->Dependencies->push_back(WuString(lib_name));
+					img_info->Dependencies.push_back(lib_name);
 
 				delload_opffset++;
 			}

@@ -330,7 +330,7 @@ namespace LibSnitcher
 		PIMAGE_FILE_HEADER _wrapper;
 	};
 
-	public ref class OptionalHeaders
+	public ref class OptionalHeader
 	{
 	public:
 		property MagicNumber Magic { MagicNumber get() { return (MagicNumber)_wrapper->Magic; } }
@@ -365,7 +365,7 @@ namespace LibSnitcher
 		property DirectoryEntry^ ImportTable { DirectoryEntry^ get() { return gcnew DirectoryEntry(_wrapper->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT]); } }
 		property DirectoryEntry^ ResourceTable { DirectoryEntry^ get() { return gcnew DirectoryEntry(_wrapper->DataDirectory[IMAGE_DIRECTORY_ENTRY_RESOURCE]); } }
 		property DirectoryEntry^ ExceptionTable { DirectoryEntry^ get() { return gcnew DirectoryEntry(_wrapper->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION]); } }
-		property DirectoryEntry^ CertificateTable { DirectoryEntry^ get() { return gcnew DirectoryEntry(_wrapper->DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY]); } }
+		property DirectoryEntry^ SecurityTable { DirectoryEntry^ get() { return gcnew DirectoryEntry(_wrapper->DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY]); } }
 		property DirectoryEntry^ BaseRelocationTable { DirectoryEntry^ get() { return gcnew DirectoryEntry(_wrapper->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC]); } }
 		property DirectoryEntry^ DebugTable { DirectoryEntry^ get() { return gcnew DirectoryEntry(_wrapper->DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG]); } }
 		property DirectoryEntry^ ArchitectureTable { DirectoryEntry^ get() { return gcnew DirectoryEntry(_wrapper->DataDirectory[IMAGE_DIRECTORY_ENTRY_ARCHITECTURE]); } }
@@ -377,20 +377,20 @@ namespace LibSnitcher
 		property DirectoryEntry^ DelayImportTable { DirectoryEntry^ get() { return gcnew DirectoryEntry(_wrapper->DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT]); } }
 		property DirectoryEntry^ CorHeaderTable { DirectoryEntry^ get() { return gcnew DirectoryEntry(_wrapper->DataDirectory[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR]); } }
 
-		OptionalHeaders(IMAGE_OPTIONAL_HEADER32& header) {
+		OptionalHeader(IMAGE_OPTIONAL_HEADER32& header) {
 			_wrapper = new LS_IMAGE_OPTIONAL_HEADER(header);
 		}
 
-		OptionalHeaders(IMAGE_OPTIONAL_HEADER64& header) {
+		OptionalHeader(IMAGE_OPTIONAL_HEADER64& header) {
 			_wrapper = new LS_IMAGE_OPTIONAL_HEADER(header);
 		}
 
-		~OptionalHeaders() {
+		~OptionalHeader() {
 			delete _wrapper;
 		}
 
 	protected:
-		!OptionalHeaders() {
+		!OptionalHeader() {
 			delete _wrapper;
 		}
 
@@ -410,6 +410,7 @@ namespace LibSnitcher
 		property UInt32 PointerToLineNumbers { UInt32 get() { return _wrapper->PointerToLinenumbers; } }
 		property UInt16 NumberOfRelocations { UInt16 get() { return _wrapper->NumberOfRelocations; } }
 		property UInt16 NumberOfLinenumbers { UInt16 get() { return _wrapper->NumberOfLinenumbers; } }
+		property SectionCharacteristics Characteristics { SectionCharacteristics get() { return (SectionCharacteristics)_wrapper->Characteristics; } }
 
 		SectionHeader(IMAGE_SECTION_HEADER& header) {
 			_wrapper = new IMAGE_SECTION_HEADER();
@@ -471,18 +472,18 @@ namespace LibSnitcher
 		property Int32 CoffHeaderOffset { Int32 get() { return _wrapper->CoffHeaderOffset; } }
 		property CoffHeader^ FileHeader { CoffHeader^ get() { return _coff_header; } }
 		property Boolean IsCoffOnly { Boolean get() { return _wrapper->IsCoffOnly; } }
-		property Int32 OptionalHeadersOffset { Int32 get() { return _wrapper->OptionalHeadersOffset; } }
-		property OptionalHeaders^ OptHeaders { OptionalHeaders^ get() { return _opt_headers; } }
+		property Int32 OptionalHeaderOffset { Int32 get() { return _wrapper->OptionalHeaderOffset; } }
+		property OptionalHeader^ OptHeader { OptionalHeader^ get() { return _opt_headers; } }
 
 		property array<SectionHeader^>^ SectionHeaders {
 			array<SectionHeader^>^ get() {
-				size_t section_count = _wrapper->SectionHeaders->size();
+				size_t section_count = _wrapper->SectionHeaders.size();
 				if (section_count == 0)
 					return gcnew array<SectionHeader^>(0);
 
 				array<SectionHeader^>^ output = gcnew array<SectionHeader^>(static_cast<int>(section_count));
 				int index = 0;
-				for (IMAGE_SECTION_HEADER& header : *_wrapper->SectionHeaders)
+				for (IMAGE_SECTION_HEADER& header : _wrapper->SectionHeaders)
 					output[index++] = gcnew SectionHeader(header);
 
 				return output;
@@ -508,17 +509,17 @@ namespace LibSnitcher
 
 			_name = Path::GetFileName(file_path);
 			if (_wrapper->IsCoffOnly) {
-				_coff_header = gcnew CoffHeader(*_wrapper->CoffHeader);
+				_coff_header = gcnew CoffHeader(_wrapper->CoffHeader);
 				_opt_headers = nullptr;
 			}
 			else {
 				if (_wrapper->Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
-					_coff_header = gcnew CoffHeader(_wrapper->NtHeaders32->FileHeader);
-					_opt_headers = gcnew OptionalHeaders(_wrapper->NtHeaders32->OptionalHeader);
+					_coff_header = gcnew CoffHeader(_wrapper->NtHeaders32.FileHeader);
+					_opt_headers = gcnew OptionalHeader(_wrapper->NtHeaders32.OptionalHeader);
 				}
 				else {
-					_coff_header = gcnew CoffHeader(_wrapper->NtHeaders64->FileHeader);
-					_opt_headers = gcnew OptionalHeaders(_wrapper->NtHeaders64->OptionalHeader);
+					_coff_header = gcnew CoffHeader(_wrapper->NtHeaders64.FileHeader);
+					_opt_headers = gcnew OptionalHeader(_wrapper->NtHeaders64.OptionalHeader);
 				}
 			}
 
@@ -530,17 +531,16 @@ namespace LibSnitcher
 			else
 				_is_console = false;
 
-			if (_wrapper->CorHeader != NULL) {
-				_cor_header = gcnew CorHeader(*_wrapper->CorHeader);
-			}
-			else
+			if (_wrapper->CorHeaderOffset == -1)
 				_cor_header = nullptr;
+			else
+				_cor_header = gcnew CorHeader(_wrapper->CorHeader);
 		}
 
 	private:
 		String^ _name;
 		CoffHeader^ _coff_header;
-		OptionalHeaders^ _opt_headers;
+		OptionalHeader^ _opt_headers;
 		CorHeader^ _cor_header;
 		Boolean _is_console;
 		Boolean _is_exe;

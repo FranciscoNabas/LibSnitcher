@@ -18,7 +18,17 @@ namespace LibSnitcher
             _printed = new();
         }
 
-        public void GetDependencyChainList(string lib_name, bool unique)
+        public List<Module> GetDependencyChainList(string lib_name, bool unique)
+        {
+            DependencyChain factory = DependencyChain.GetChain(unique);
+            List<Module> chain = factory.ResolveDependencyChain(lib_name);
+            
+            factory.Dispose();
+
+            return chain;
+        }
+
+        public void PrintModuleDependencyChain(string lib_name, bool unique)
         {
             DependencyChain factory = DependencyChain.GetChain(unique);
             List<Module> chain = factory.ResolveDependencyChain(lib_name);
@@ -43,10 +53,10 @@ namespace LibSnitcher
         {
             StringBuilder buffer = new();
             buffer.Append(' ', module.Depth * 2);
-            buffer.Append($"{module.Name} (Loaded: {module.Loaded}): {module.PostfixText}");
+            buffer.Append($"{module.AbsoluteName} (Loaded: {module.Loaded}): {module.PostfixText}");
 
-            // buffer.Append($"{module.Name} <{module.Depth}> (Loaded: {module.Loaded}; Parent: {module.Parent}): {module.Path}");
-            // buffer.Append($"{module.Name} (Id: {module.Id};Loaded: {module.Loaded}; Parent Id: {module.ParentId};Parent: {module.Parent}): {module.Path}");
+            // buffer.Append($"{module.AbsoluteName} <{module.Depth}> (Loaded: {module.Loaded}; Parent: {module.Parent}): {module.Path}");
+            // buffer.Append($"{module.AbsoluteName} (Id: {module.Id};Loaded: {module.Loaded}; Parent Id: {module.ParentId};Parent: {module.Parent}): {module.Path}");
 
             _context.WriteObject(buffer.ToString());
         }
@@ -90,40 +100,48 @@ namespace LibSnitcher
             return _instance._result.Values.ToList();
         }
 
-        internal Module GetModule(Guid parent_id, string name, string parent, DependencySource source, int depth, out bool is_trivial)
+        internal Module GetModule(Guid parent_id, string name, string parent, DependencySource source, int new_depth, out bool is_trivial)
         {
             if (_instance._result.TryGetValue(name, out Module module))
             {
                 is_trivial = true;
-                return module.TrivialCopy(depth, parent, parent_id);
+                return module.TrivialCopy(new_depth, parent, parent_id);
             }
             is_trivial = false;
 
-            LibInfo info = _unwrapper.GetDependencyList(name, source);
-            Module new_module = new(Guid.NewGuid(), parent_id, info.Name, parent, source, depth, info.Path, info.Loaded, info.LoaderError, info.Dependencies, ref _instance);
+            ModuleBase base_module = _unwrapper.GetDependencyList(name, source);
+            Module new_module = new(parent_id, parent, source, new_depth, base_module, ref _instance);
             _result.Add(name, new_module);
 
             return new_module;
         }
+
+        internal static void PrintLocation(string location)
+        {
+            // Console.SetCursorPosition(0, Console.CursorTop);
+            Console.Write(location);
+        }
     }
 
-    internal class Module
+    public class Module
     {
         private readonly DependencyChain _chain;
-        private readonly DependencyEntry[] _native_dependencies;
+        private readonly List<DependencyEntry> _native_dependencies;
 
         internal Guid Id { get; private set; }
         internal Guid ParentId { get; private set; }
 
-        internal string Name { get; private set; }
-        internal string Parent { get; private set; }
-        internal DependencySource Source { get; }
+        public string Name { get; }
+        public string AssemblyFullName { get; }
+        public string Parent { get; private set; }
+        public DependencySource Source { get; }
         internal int Depth { get; private set; }
-        internal string Path { get; set; }
-        internal bool Loaded { get; set; }
-        internal Exception LoaderException { get; set; }
+        public string Path { get; }
+        public bool IsClr { get; }
+        public bool Loaded { get; }
+        public Exception LoaderException { get; }
 
-        internal List<Module> Dependencies { get; private set; }
+        public List<Module> Dependencies { get; private set; }
 
         internal string PostfixText
         {
@@ -139,29 +157,40 @@ namespace LibSnitcher
             }
         }
 
-        internal Module(Guid id, Guid parent_id, string name, string parent, DependencySource source, 
-            int depth, string path, bool loaded, Exception loader_exception, DependencyEntry[] native_dependencies, ref DependencyChain chain)
+        internal string AbsoluteName
         {
-            _chain = chain;
-            if (native_dependencies is not null)
-                _native_dependencies = native_dependencies;
-            else
-                _native_dependencies = new DependencyEntry[0];
+            get
+            {
+                if (IsClr)
+                    if (!string.IsNullOrEmpty(AssemblyFullName))
+                        return AssemblyFullName;
 
-            Id = id;
+                return Name;
+            }
+        }
+
+        internal Module(Guid parent_id, string parent, DependencySource source, int depth, ModuleBase base_module, ref DependencyChain chain)
+        {
+            Id = Guid.NewGuid();
             ParentId = parent_id;
-            Name = name;
             Parent = parent;
             Source = source;
             Depth = depth;
-            Path = path;
-            Loaded = loaded;
-            LoaderException = loader_exception;
+
+            Name = base_module.Name;
+            Path = base_module.Path;
+            AssemblyFullName = base_module.AssemblyFullName;
+            Loaded = base_module.Loaded;
+            LoaderException = base_module.LoaderException;
+
             Dependencies = new();
+            _native_dependencies = base_module.Dependencies;
+            _chain = chain;
         }
 
         internal Module TrivialCopy(int depth, string parent, Guid parent_id)
         {
+            // DependencyChain.PrintLocation("Module.TrivialCopy");
             Module new_module = (Module)this.MemberwiseClone();
 
             new_module.Depth = depth;
@@ -177,6 +206,7 @@ namespace LibSnitcher
 
         internal void ResolveDependencies()
         {
+            // DependencyChain.PrintLocation("Module.ResolveDependencies");
             List<Module> new_dependencies = new();
             foreach (DependencyEntry entry in _native_dependencies)
             {

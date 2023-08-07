@@ -20,27 +20,22 @@ namespace LibSnitcher::Core
 			bool IsDll;
 			bool IsExe;
 			DWORD CoffHeaderOffset;
-			DWORD OptionalHeadersOffset;
+			DWORD OptionalHeaderOffset;
 			DWORD CorHeaderOffset;
 			union
 			{
-				PIMAGE_NT_HEADERS32 NtHeaders32;
-				PIMAGE_NT_HEADERS64 NtHeaders64;
-				PIMAGE_FILE_HEADER CoffHeader;
+				IMAGE_NT_HEADERS32 NtHeaders32;
+				IMAGE_NT_HEADERS64 NtHeaders64;
+				IMAGE_FILE_HEADER CoffHeader;
 			};
-			PIMAGE_COR20_HEADER CorHeader;
-			wuvector<IMAGE_SECTION_HEADER>* SectionHeaders;
+			IMAGE_COR20_HEADER CorHeader;
+			wuvector<IMAGE_SECTION_HEADER> SectionHeaders;
 
 			_LS_PORTABLE_EXECUTABLE() 
 				: Magic(0), MetadataStartOffset(0), MetadataSize(0), IsCoffOnly(false), IsConsoleApplication(false),
-					IsDll(0), IsExe(0), CoffHeaderOffset(0), OptionalHeadersOffset(0), CorHeaderOffset(0), NtHeaders64(NULL), CorHeader(0)
-			{
-				SectionHeaders = new wuvector<IMAGE_SECTION_HEADER>();
-			}
-			~_LS_PORTABLE_EXECUTABLE() {
-				delete SectionHeaders;
-				delete NtHeaders32;
-			}
+					IsDll(0), IsExe(0), CoffHeaderOffset(0), OptionalHeaderOffset(0), CorHeaderOffset(0) { }
+
+			~_LS_PORTABLE_EXECUTABLE() { }
 
 		} LS_PORTABLE_EXECUTABLE, * PLS_PORTABLE_EXECUTABLE;
 
@@ -49,16 +44,12 @@ namespace LibSnitcher::Core
 			bool IsClr;
 			DWORD ImportTableRva;
 			DWORD DelayLoadTableRva;
-			wuvector<WuString>* Dependencies;
+			wuvector<WuString> Dependencies;
 
 			_LS_IMAGE_BASIC_INFORMATION()
-				: IsClr(false), ImportTableRva(0), DelayLoadTableRva(0) {
-				Dependencies = new wuvector<WuString>();
-			}
+				: IsClr(false), ImportTableRva(0), DelayLoadTableRva(0) { }
 
-			~_LS_IMAGE_BASIC_INFORMATION() {
-				delete Dependencies;
-			}
+			~_LS_IMAGE_BASIC_INFORMATION() { }
 
 		} LS_IMAGE_BASIC_INFORMATION, *PLS_IMAGE_BASIC_INFORMATION;
 
