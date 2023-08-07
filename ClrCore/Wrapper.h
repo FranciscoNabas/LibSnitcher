@@ -50,27 +50,9 @@ namespace LibSnitcher
 		}
 
 		property bool Loaded { bool get() { return _loaded; } }
-		property bool IsClr {
-			bool get() {
-				if (_wrapper != NULL)
-					return _wrapper->IsClr;
-
-				return false;
-			}
-		}
+		property bool IsClr { bool get() { return _is_clr; } }
 		property Exception^ LoaderException { Exception^ get() { return _loader_exception; } }
-
-		property List<DependencyEntry^>^ Dependencies {
-			List<DependencyEntry^>^ get() {
-				auto output = gcnew List<DependencyEntry^>();
-				
-				if (_wrapper != NULL)
-					for (WuString& dependency : _wrapper->Dependencies)
-						output->Add(gcnew DependencyEntry(gcnew String(dependency.GetBuffer()), DependencySource::PeTables));
-
-				return output;
-			}
-		}
+		property List<DependencyEntry^>^ Dependencies { List<DependencyEntry^>^ get() { return _dependencies; } }
 
 		ModuleBase(String^ name, String^ path, String^ ass_full_name,
 			bool loaded, Exception^ loader_exception, Core::PeHelper::PLS_IMAGE_BASIC_INFORMATION basic_info)
@@ -79,14 +61,15 @@ namespace LibSnitcher
 			_wrapper = new Core::PeHelper::LS_IMAGE_BASIC_INFORMATION();
 			_wrapper->DelayLoadTableRva = basic_info->DelayLoadTableRva;
 			_wrapper->ImportTableRva = basic_info->ImportTableRva;
-			_wrapper->IsClr = basic_info->IsClr;
+			_is_clr = basic_info->IsClr;
 
+			_dependencies = gcnew List<DependencyEntry^>();
 			for (WuString& dep : basic_info->Dependencies)
-				_wrapper->Dependencies.push_back(dep);
+				_dependencies->Add(gcnew DependencyEntry(gcnew String(dep.GetBuffer()), DependencySource::PeTables));
 		}
 
 		ModuleBase(String^ name, String^ path, String^ ass_full_name, bool loaded, bool is_clr, Exception^ loader_exception)
-			: _name(name), _path(path), _ass_full_name(ass_full_name), _loaded(loaded), _loader_exception(loader_exception), _wrapper(NULL)
+			: _name(name), _path(path), _ass_full_name(ass_full_name), _loaded(loaded), _is_clr(is_clr), _loader_exception(loader_exception), _wrapper(NULL)
 		{ }
 
 		~ModuleBase() {
@@ -105,7 +88,9 @@ namespace LibSnitcher
 		String^ _path;
 		String^ _ass_full_name;
 		bool _loaded;
+		bool _is_clr;
 		Exception^ _loader_exception;
+		List<DependencyEntry^>^ _dependencies;
 		Core::PeHelper::PLS_IMAGE_BASIC_INFORMATION _wrapper;
 	};
 

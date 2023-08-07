@@ -179,12 +179,17 @@ namespace LibSnitcher
 
             Name = base_module.Name;
             Path = base_module.Path;
+            IsClr = base_module.IsClr;
             AssemblyFullName = base_module.AssemblyFullName;
             Loaded = base_module.Loaded;
             LoaderException = base_module.LoaderException;
 
             Dependencies = new();
-            _native_dependencies = base_module.Dependencies;
+            if (base_module.Dependencies is not null)
+                _native_dependencies = new(base_module.Dependencies);
+            else
+                _native_dependencies = new();
+
             _chain = chain;
         }
 

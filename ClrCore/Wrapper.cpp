@@ -98,7 +98,7 @@ namespace LibSnitcher::Core
 
 					output->AssemblyFullName = assembly->FullName;
 
-					for each (AssemblyName^ ref_ass in assembly->GetReferencedAssemblies())
+					for each (AssemblyName ^ ref_ass in assembly->GetReferencedAssemblies())
 						output->Dependencies->Add(gcnew DependencyEntry(ref_ass->FullName, DependencySource::ReferencedAssemblies));
 				}
 			}
@@ -133,12 +133,12 @@ namespace LibSnitcher::Core
 			{
 				hmodule = LoadLibraryEx(wrapped_path.GetBuffer(), NULL, DONT_RESOLVE_DLL_REFERENCES);
 				if (hmodule == NULL)
-					return gcnew ModuleBase(name, path, assembly->FullName, false, false, loader_exception);
+					return gcnew ModuleBase(name, path, nullptr, false, true, loader_exception);
 
 				auto basic_info = make_wushared<PeHelper::LS_IMAGE_BASIC_INFORMATION>();
 				LSRESULT result = pe_helper->GetImageBasicInformation(hmodule, basic_info.get());
 				if (result.Result != ERROR_SUCCESS)
-					return gcnew ModuleBase(name, path, assembly->FullName, true, false, gcnew NativeException(result));
+					return gcnew ModuleBase(name, path, nullptr, true, true, gcnew NativeException(result));
 
 				output = gcnew ModuleBase(name, path, String::Empty, true, nullptr, basic_info.get());
 
@@ -151,7 +151,7 @@ namespace LibSnitcher::Core
 						path = gcnew String(buffer);
 
 					if (!TryLoadAssembly(name, path, assembly, loader_exception))
-						return gcnew ModuleBase(name, path, assembly->FullName, true, true, loader_exception);
+						return gcnew ModuleBase(name, path, nullptr, true, true, loader_exception);
 				}
 			}
 		}
@@ -179,13 +179,14 @@ namespace LibSnitcher::Core
 			try {
 				assembly = Assembly::LoadFrom(name);
 			}
-			catch (Exception^) {
+			catch (Exception^ ex1) {
+				loader_exception = ex1;
 				if (!String::IsNullOrEmpty(path)) {
 					try {
 						assembly = Assembly::LoadFrom(path);
 					}
-					catch (Exception^ ex) {
-						loader_exception = ex;
+					catch (Exception^ ex2) {
+						loader_exception = ex2;
 						return false;
 					}
 				}
