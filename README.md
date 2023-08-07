@@ -71,10 +71,10 @@ Get-PeHeaders -Path 'C:\Windows\System32\ntdll.dll'
   
 This project draws inspiration from the great [Dependencies][01].  
 The documentation used is available in the Microsoft docs:  
-
-[PE file format][02]
-[The 'Assembly' class][03]
-[The 'PortableExecutable' namespace][04]
+  
+[PE file format][02]  
+[The 'Assembly' class][03]  
+[The 'PortableExecutable' namespace][04]  
 
 <!-- Link definition -->
 
