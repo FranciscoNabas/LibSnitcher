@@ -1,6 +1,6 @@
 @{
     GUID = 'A3DD0591-F976-4D78-ADC4-62AEF94668D2'
-    ModuleVersion = '1.1.0'
+    ModuleVersion = '1.2.0'
     RootModule = 'LibSnitcher.dll'
     PowerShellVersion = '5.1'
     CompatiblePSEditions = @(

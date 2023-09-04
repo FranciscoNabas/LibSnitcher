@@ -98,6 +98,12 @@ namespace LibSnitcher.Commands
         [Parameter()]
         public SwitchParameter ClrOnly { get; set; }
 
+        protected override void BeginProcessing()
+        {
+            if (!File.Exists(Path))
+                throw new FileNotFoundException($"File '{Path}' not found.");
+        }
+
         protected override void ProcessRecord()
         {
             Helper helper = new(this);
